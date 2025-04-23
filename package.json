@@ -1,0 +1,22 @@
+{
+  "name": "s3-to-gitlab",
+  "version": "1.0.0",
+  "description": "AWS Lambda function to sync S3 object changes to a GitLab repository.",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "test": "mocha test/**/*.test.mjs"
+  },
+  "keywords": [
+    "aws",
+    "lambda",
+    "s3",
+    "gitlab",
+    "serverless"
+  ],
+  "author": "Carl Parrish <cparrish@deeplydigital.com>",
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "axios": "^1.7.9"
+  }
+}
