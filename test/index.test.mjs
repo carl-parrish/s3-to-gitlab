@@ -68,7 +68,7 @@ describe('S3 to GitLab Lambda Handler', () => {
     s3Mock.on(GetObjectCommand).resolves({ Body: sdkStream, ContentType: 'text/plain' });
 
     // Note: Axios stubs are reset in test-helper's afterEach
- });
+  });
 
   // --- Tests ---
   it('should successfully process a create event (ObjectCreated:Put)', async () => {
@@ -219,9 +219,9 @@ describe('S3 to GitLab Lambda Handler', () => {
     // Should NOT throw an error because the fallback handles the specific POST error
     let actError = null;
     try {
-        await handler(mockEvent);
+      await handler(mockEvent);
     } catch (e) {
-        actError = e;
+      actError = e;
     }
 
     // Assert handler completed successfully
@@ -254,6 +254,125 @@ describe('S3 to GitLab Lambda Handler', () => {
     expect(putArgs[1]).to.deep.equal(expectedPutData); // Data
     expect(putArgs[2].headers).to.deep.equal(expectedHeaders); // Headers
   });
+  // Test for missing AWS_REGION environment variable
+  it('should throw an error if AWS_REGION is not set', async () => {
+    const objectKey = 'path/to/file.txt';
+    const mockEvent = createMockS3Event('ObjectCreated:Put', bucketName, objectKey);
 
-  // Add more tests below (or this is the last one for now)
+    // Temporarily unset AWS_REGION
+    const originalRegion = process.env.AWS_REGION;
+    delete process.env.AWS_REGION;
+
+    let error = null;
+    try {
+      await handler(mockEvent);
+    } catch (e) {
+      error = e;
+    }
+
+    // Restore AWS_REGION
+    process.env.AWS_REGION = originalRegion;
+
+    expect(error).to.not.be.null;
+    expect(error.message).to.equal('AWS_REGION environment variable is not set');
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(0);
+    expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
+  });
+
+  // Test for missing SECRET_ID environment variable
+  it('should throw an error if SECRET_ID is not set', async () => {
+    const objectKey = 'path/to/file.txt';
+    const mockEvent = createMockS3Event('ObjectCreated:Put', bucketName, objectKey);
+
+    // Temporarily unset SECRET_ID
+    const originalSecretId = process.env.SECRET_ID;
+    delete process.env.SECRET_ID;
+
+    let error = null;
+    try {
+      await handler(mockEvent);
+    } catch (e) {
+      error = e;
+    }
+
+    // Restore SECRET_ID
+    process.env.SECRET_ID = originalSecretId;
+
+    expect(error).to.not.be.null;
+    expect(error.message).to.include('Cannot read properties of undefined');
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(0);
+    expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
+  });
+
+  // Test for unsupported event category
+  it('should log a warning for unsupported event categories', async () => {
+    const objectKey = 'path/to/unsupported-event.txt';
+    const mockEvent = createMockS3Event('ObjectRestore:Post', bucketName, objectKey);
+
+    let error = null;
+    try {
+      await handler(mockEvent);
+    } catch (e) {
+      error = e;
+    }
+
+    expect(error).to.be.null;
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
+    expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
+    expect(axiosPostStub.notCalled).to.be.true;
+    expect(axiosPutStub.notCalled).to.be.true;
+    expect(axiosDeleteStub.notCalled).to.be.true;
+  });
+
+  // Test for unknown event category
+  it('should throw an error for unknown event categories', async () => {
+    const objectKey = 'path/to/unknown-event.txt';
+    const mockEvent = createMockS3Event('ObjectUnknown:Action', bucketName, objectKey);
+
+    let error = null;
+    try {
+      await handler(mockEvent);
+    } catch (e) {
+      error = e;
+    }
+
+    expect(error).to.not.be.null;
+    expect(error.message).to.include('Unknown event category for event: ObjectUnknown:Action');
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
+    expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
+    expect(axiosPostStub.notCalled).to.be.true;
+    expect(axiosPutStub.notCalled).to.be.true;
+    expect(axiosDeleteStub.notCalled).to.be.true;
+  });
+
+  // Test for missing S3 object key
+  it('should throw an error if S3 object key is missing', async () => {
+    const mockEvent = {
+      Records: [
+        {
+          eventName: 'ObjectCreated:Put',
+          userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' },
+          s3: {
+            bucket: { name: bucketName },
+            object: {}, // Missing key
+          },
+        },
+      ],
+    };
+
+    let error = null;
+    try {
+      await handler(mockEvent);
+    } catch (e) {
+      error = e;
+    }
+
+    expect(error).to.not.be.null;
+    expect(error.message).to.include('Cannot destructure property');
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
+    expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
+    expect(axiosPostStub.notCalled).to.be.true;
+    expect(axiosPutStub.notCalled).to.be.true;
+    expect(axiosDeleteStub.notCalled).to.be.true;
+  });
 });
