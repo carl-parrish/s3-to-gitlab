@@ -7,7 +7,13 @@ import {
   s3Mock,
   axiosPostStub,
   axiosPutStub,
-  axiosDeleteStub
+  axiosDeleteStub,
+  // Add new helpers:
+  mockSecretsManagerError,
+  mockS3GetObjectError,
+  mockAxiosPostError,
+  // mockAxiosPutError, // Not used yet, but can import if needed later
+  mockAxiosDeleteError,
 } from './test-helper.mjs';
 import { GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
@@ -107,7 +113,7 @@ describe('S3 to GitLab Lambda Handler', () => {
     const mockEvent = createMockS3Event('ObjectCreated:Put', bucketName, objectKey);
     const expectedError = new Error('Simulated Secrets Manager Error');
     expectedError.name = 'AccessDeniedException'; // Simulate a specific AWS error type
-    secretsManagerMock.on(GetSecretValueCommand).rejects(expectedError);
+    mockSecretsManagerError(expectedError); // Use helper
     let error = null;
     try { await handler(mockEvent); } catch (e) { error = e; }
     expect(error).to.not.be.null;
@@ -126,7 +132,8 @@ describe('S3 to GitLab Lambda Handler', () => {
     const mockEvent = createMockS3Event('ObjectCreated:Put', bucketName, objectKey);
     const expectedError = new Error('Simulated S3 GetObject Error');
     expectedError.name = 'NoSuchKey'; // Simulate a specific AWS S3 error
-    s3Mock.on(GetObjectCommand).rejects(expectedError);
+    // Ensure Secrets Manager succeeds (handled by beforeEach)
+    mockS3GetObjectError(expectedError); // Use helper
     let error = null;
     try { await handler(mockEvent); } catch (e) { error = e; }
     expect(error).to.not.be.null;
@@ -145,7 +152,9 @@ describe('S3 to GitLab Lambda Handler', () => {
     const mockEvent = createMockS3Event('ObjectCreated:Put', bucketName, objectKey);
     const expectedError = new Error('Simulated GitLab API Error (Network)');
     expectedError.response = { status: 401, data: { message: 'Invalid token' } };
-    axiosPostStub.rejects(expectedError);
+    // Ensure AWS mocks succeed (handled by beforeEach)
+    mockAxiosPostError(expectedError); // Use helper
+    // Ensure put/delete stubs resolve (handled by beforeEach/afterEach in helper)
     let error = null;
     try { await handler(mockEvent); } catch (e) { error = e; }
     expect(error).to.not.be.null;
@@ -164,8 +173,9 @@ describe('S3 to GitLab Lambda Handler', () => {
     const mockEvent = createMockS3Event('ObjectRemoved:Delete', bucketName, objectKey);
     const expectedError = new Error('Simulated GitLab API Error (Delete)');
     expectedError.response = { status: 403, data: { message: 'Forbidden' } }; // Simulate a delete failure
-    secretsManagerMock.on(GetSecretValueCommand).resolves({ SecretString: JSON.stringify({ token: expectedToken }) });
-    axiosDeleteStub.rejects(expectedError);
+    // Ensure Secrets Manager succeeds (handled by beforeEach)
+    mockAxiosDeleteError(expectedError); // Use helper
+    // Ensure post/put stubs resolve (handled by beforeEach/afterEach in helper)
     let error = null;
     try { await handler(mockEvent); } catch (e) { error = e; }
     expect(error).to.not.be.null;
@@ -196,10 +206,13 @@ describe('S3 to GitLab Lambda Handler', () => {
     // Ensure PUT succeeds (this is the expected fallback)
     axiosPutStub.resolves({ status: 200, data: { message: 'File updated' } });
 
-    // Ensure AWS mocks succeed (default behavior should be fine due to beforeEach)
-    // Explicitly setting S3 mock to provide content for clarity
-    const stream = new Readable(); stream.push(expectedContent); stream.push(null);
-    s3Mock.on(GetObjectCommand).resolves({ Body: sdkStreamMixin(stream), ContentType: 'text/plain' }); // Ensure content type is set
+    // Ensure AWS mocks succeed
+    // Create stream before the .on() call for consistency
+    const stream = new Readable();
+    stream.push(expectedContent);
+    stream.push(null);
+    const sdkStream = sdkStreamMixin(stream);
+    s3Mock.on(GetObjectCommand).resolves({ Body: sdkStream, ContentType: 'text/plain' }); // Use pre-created stream, ensure ContentType
 
 
     // Act

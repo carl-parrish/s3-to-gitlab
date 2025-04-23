@@ -69,11 +69,39 @@ afterEach(() => {
   axiosDeleteStub.restore();
 });
 
-// Export mocks and stubs for use in tests
+// --- NEW Helper Functions for Error Mocking ---
+const mockSecretsManagerError = (error) => {
+  secretsManagerMock.on(GetSecretValueCommand).rejects(error);
+};
+
+const mockS3GetObjectError = (error) => {
+  s3Mock.on(GetObjectCommand).rejects(error);
+};
+
+const mockAxiosPostError = (error) => {
+  axiosPostStub.rejects(error);
+};
+
+const mockAxiosPutError = (error) => {
+  axiosPutStub.rejects(error);
+};
+
+const mockAxiosDeleteError = (error) => {
+  axiosDeleteStub.rejects(error);
+};
+
+
+// Export mocks, stubs, AND helper functions for use in tests
 export {
   secretsManagerMock,
   s3Mock,
   axiosPostStub,
   axiosPutStub,
   axiosDeleteStub,
+  // Add new helpers to export:
+  mockSecretsManagerError,
+  mockS3GetObjectError,
+  mockAxiosPostError,
+  mockAxiosPutError,
+  mockAxiosDeleteError,
 };
