@@ -208,7 +208,12 @@ export const gitlabApi = {
           errorMessage.toLowerCase().includes('File already exists')) {
           console.log('File already exists, attempting to update:', filePath);
           const updateCommitMessage = commitMessage.replace('Creation', 'Update');
-          return await gitlabApi.updateFile(apiUrl, projectId, filePath, branch, content, token, commitMessage);
+          try {
+            return await gitlabApi.updateFile(apiUrl, projectId, filePath, branch, content, token, updateCommitMessage);
+          } catch (updateError) {
+            console.error(`Failed to update file ${filePath}. Attempt failed with status ${updateError.response?.status}. Error not automatically handled.}`)
+            throw updateError;
+          }
         }
       }
       console.error(`Failed to add or update file ${filePath}. Initial attempt failed with status ${error.response?.status}. Error not automatically handled.`);
