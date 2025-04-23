@@ -201,11 +201,12 @@ export const gitlabApi = {
     try {
       const encodedFilePath = encodeURIComponent(filePath);
       return await gitlabApi.addFile(apiUrl, projectId, filePath, branch, content, token, commitMessage);
-    } catch (error) {
-      if (error.response?.status === 400) {
-        const errorMessage = error.response?.data?.message || 'Unknown error';
-        if (errorMessage.toLowerCase().includes('A file with this name already exists') ||
-          errorMessage.toLowerCase().includes('File already exists')) {
+    } catch (addError) {
+      if (addError.response?.status === 400) {
+        const errorMessage = addError.response?.data?.message || 'Unknown error';
+
+        if (errorMessage.toLowerCase().includes('a file with this name already exists') ||
+          errorMessage.toLowerCase().includes('file already exists')) {
           console.log('File already exists, attempting to update:', filePath);
           const updateCommitMessage = commitMessage.replace('Creation', 'Update');
           try {
@@ -216,8 +217,8 @@ export const gitlabApi = {
           }
         }
       }
-      console.error(`Failed to add or update file ${filePath}. Initial attempt failed with status ${error.response?.status}. Error not automatically handled.`);
-      throw error;
+      console.error(`Failed to add or update file ${filePath}. Initial attempt failed with status ${addError.response?.status}. Error not automatically handled.`);
+      throw addError;
     }
   }
   // Add other GitLab API functions as needed
