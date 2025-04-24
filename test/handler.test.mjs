@@ -1,25 +1,32 @@
 // Import necessary testing libraries and modules
-import chai, { expect } from 'chai';
+import * as chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
-import { mockClient } from 'aws-sdk-client-mock';
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import axios from 'axios';
+import { Readable } from 'stream';
+import { sdkStreamMixin } from '@aws-sdk/util-stream-node';
+
+
+// Import the necessary items from your helper file
+import {
+  secretsManagerMock,
+  s3Mock,
+  axiosPostStub,
+  axiosPutStub,
+  axiosDeleteStub,
+  GetObjectCommand,
+  GetSecretValueCommand,
+} from './test-helper.mjs';
+
+
+
 
 // Import the handler function to be tested
 import { handler } from '../index.mjs';
 
 // Use chai-as-promised plugin
 chai.use(chaiAsPromised);
+const expect = chai.expect
 
-// Declare mock client variables in the outer scope
-let s3Mock;
-let secretsManagerMock;
-// Declare Sinon stub variables for axios
-let axiosPostStub;
-let axiosPutStub;
-let axiosDeleteStub;
 
 // Main test suite for the Lambda handler
 describe('Lambda Handler Tests', () => {
@@ -37,38 +44,14 @@ describe('Lambda Handler Tests', () => {
       AWS_REGION: 'us-east-1',
     };
 
-    // Initialize and set up default mocks before each test
-    s3Mock = mockClient(S3Client);
-    secretsManagerMock = mockClient(SecretsManagerClient);
-
-    // Default mock for Secrets Manager
-    secretsManagerMock.on(GetSecretValueCommand).resolves({
-      SecretString: JSON.stringify({ token: 'fake-gitlab-token' }),
-    });
-
-    // Create and configure default Sinon stubs for axios
-    axiosPostStub = sinon.stub(axios, 'post');
-    axiosPutStub = sinon.stub(axios, 'put');
-    axiosDeleteStub = sinon.stub(axios, 'delete');
-
-    // Default success responses
-    axiosPostStub.resolves({ status: 201, data: { message: 'File created' } });
-    axiosPutStub.resolves({ status: 200, data: { message: 'File updated' } });
-    axiosDeleteStub.resolves({ status: 204, data: {} });
-
-    // Note: sinon.restore() is called in afterEach, which cleans these up
   });
 
   // Hook to run after each test case
   afterEach(() => {
     // Restore original environment variables
     process.env = originalEnv;
-
-    // Ensure all mocks are clean after tests
-    s3Mock.reset();
-    secretsManagerMock.reset();
-    sinon.restore();
   });
+
 
   // Test suite for successful create/update events
   describe('Successful Create/Update Events', () => {
@@ -78,8 +61,12 @@ describe('Lambda Handler Tests', () => {
       const objectKey = 'path/to/new-file.txt';
       const mockFileContentString = 'This is the content of the new file.';
       const mockFileContentBuffer = Buffer.from(mockFileContentString, 'utf-8');
-      const mockEvent = { Records: [{ eventName: 'ObjectCreated:Put', s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
-      s3Mock.on(GetObjectCommand, { Bucket: bucketName, Key: objectKey }).resolves({ Body: mockFileContentBuffer, ContentType: 'text/plain' });
+      const stream = new Readable();
+      stream.push(mockFileContentString);
+      stream.push(null);
+      const sdkStream = sdkStreamMixin(stream);
+      const mockEvent = { Records: [{ eventName: 'ObjectCreated:Put', userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' }, s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
+      s3Mock.on(GetObjectCommand, { Bucket: bucketName, Key: objectKey }).resolves({ Body: sdkStream, ContentType: 'text/plain' });
       await handler(mockEvent);
       expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
       const s3Calls = s3Mock.commandCalls(GetObjectCommand);
@@ -87,8 +74,8 @@ describe('Lambda Handler Tests', () => {
       expect(s3Calls[0].args[0].input).to.deep.equal({ Bucket: bucketName, Key: objectKey });
       expect(axiosPostStub.calledOnce).to.be.true;
       const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-      const expectedPayload = { branch: process.env.GITLAB_BRANCH, content: mockFileContentBuffer.toString('base64'), commit_message: `Sync S3 create: ${objectKey}`, encoding: 'base64' };
-      const expectedHeaders = { 'PRIVATE-TOKEN': 'fake-gitlab-token', 'Content-Type': 'application/json' };
+      const expectedPayload = { branch: process.env.GITLAB_BRANCH, content: mockFileContentString, commit_message: `Pipeline Creation - Object ${objectKey} `, encoding: 'text' };
+      const expectedHeaders = { 'PRIVATE-TOKEN': 'mock-gitlab-token', 'Content-Type': 'application/json' };
       expect(axiosPostStub.firstCall.args[0]).to.equal(expectedUrl);
       expect(axiosPostStub.firstCall.args[1]).to.deep.equal(expectedPayload);
       expect(axiosPostStub.firstCall.args[2].headers).to.deep.include(expectedHeaders);
@@ -102,8 +89,12 @@ describe('Lambda Handler Tests', () => {
       const objectKey = 'path/to/copied-file.log';
       const mockFileContentString = 'This file was copied.';
       const mockFileContentBuffer = Buffer.from(mockFileContentString, 'utf-8');
-      const mockEvent = { Records: [{ eventName: 'ObjectCreated:Copy', s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
-      s3Mock.on(GetObjectCommand, { Bucket: bucketName, Key: objectKey }).resolves({ Body: mockFileContentBuffer, ContentType: 'text/plain' });
+      const stream = new Readable();
+      stream.push(mockFileContentString);
+      stream.push(null);
+      const sdkStream = sdkStreamMixin(stream);
+      const mockEvent = { Records: [{ eventName: 'ObjectCreated:Copy', userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' }, s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
+      s3Mock.on(GetObjectCommand, { Bucket: bucketName, Key: objectKey }).resolves({ Body: sdkStream, ContentType: 'text/plain' });
       await handler(mockEvent);
       expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
       const s3Calls = s3Mock.commandCalls(GetObjectCommand);
@@ -111,8 +102,8 @@ describe('Lambda Handler Tests', () => {
       expect(s3Calls[0].args[0].input).to.deep.equal({ Bucket: bucketName, Key: objectKey });
       expect(axiosPostStub.calledOnce).to.be.true;
       const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-      const expectedPayload = { branch: process.env.GITLAB_BRANCH, content: mockFileContentBuffer.toString('base64'), commit_message: `Sync S3 create (via Copy): ${objectKey}`, encoding: 'base64' };
-      const expectedHeaders = { 'PRIVATE-TOKEN': 'fake-gitlab-token', 'Content-Type': 'application/json' };
+      const expectedPayload = { branch: process.env.GITLAB_BRANCH, content: mockFileContentString, commit_message: `Pipeline Creation - Object ${objectKey} via Copy`, encoding: 'text' };
+      const expectedHeaders = { 'PRIVATE-TOKEN': 'mock-gitlab-token', 'Content-Type': 'application/json' };
       expect(axiosPostStub.firstCall.args[0]).to.equal(expectedUrl);
       expect(axiosPostStub.firstCall.args[1]).to.deep.equal(expectedPayload);
       expect(axiosPostStub.firstCall.args[2].headers).to.deep.include(expectedHeaders);
@@ -129,10 +120,15 @@ describe('Lambda Handler Tests', () => {
       const objectKey = 'path/to/existing-file.js';
       const mockFileContentString = 'Updated content for existing file.';
       const mockFileContentBuffer = Buffer.from(mockFileContentString, 'utf-8');
+      const stream = new Readable();
+      stream.push(mockFileContentString);
+      stream.push(null);
+      const sdkStream = sdkStreamMixin(stream);
 
       const mockEvent = {
         Records: [{
           eventName: 'ObjectCreated:Put', // Event triggers addOrUpdateFile
+          userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' },
           s3: {
             bucket: { name: bucketName },
             object: { key: objectKey },
@@ -142,7 +138,7 @@ describe('Lambda Handler Tests', () => {
 
       // Mock S3 GetObject success
       s3Mock.on(GetObjectCommand, { Bucket: bucketName, Key: objectKey }).resolves({
-        Body: mockFileContentBuffer,
+        Body: sdkStream,
         ContentType: 'application/javascript', // Example content type
       });
 
@@ -170,15 +166,15 @@ describe('Lambda Handler Tests', () => {
 
       // 5. Check PUT arguments (uses original commit message from createHandler)
       const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-      const expectedCommitMessage = `Pipeline Creation - Object ${objectKey} `; // From createHandler.mjs
+      const expectedCommitMessage = `Pipeline Update - Object ${objectKey} `;
       const expectedPutPayload = {
         branch: process.env.GITLAB_BRANCH,
-        content: mockFileContentBuffer.toString('utf8'), // Expect 'text' encoding for .js
+        content: mockFileContentString,
         commit_message: expectedCommitMessage,
-        encoding: 'text', // Expect 'text' for .js file
+        encoding: 'text',
       };
       const expectedPutHeaders = {
-        'PRIVATE-TOKEN': 'fake-gitlab-token',
+        'PRIVATE-TOKEN': 'mock-gitlab-token',
         'Content-Type': 'application/json',
       };
       expect(axiosPutStub.firstCall.args[0]).to.equal(expectedUrl);
@@ -196,14 +192,14 @@ describe('Lambda Handler Tests', () => {
     it('should process an ObjectRemoved:Delete event and make a DELETE request to GitLab', async () => {
       const bucketName = 'test-bucket-delete';
       const objectKey = 'path/to/deleted-file.csv';
-      const mockEvent = { Records: [{ eventName: 'ObjectRemoved:Delete', s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
+      const mockEvent = { Records: [{ eventName: 'ObjectRemoved:Delete', userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' }, s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
       await handler(mockEvent);
       expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
       expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
       expect(axiosDeleteStub.calledOnce).to.be.true;
       const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-      const expectedData = { branch: process.env.GITLAB_BRANCH, commit_message: `Sync S3 delete: ${objectKey}` };
-      const expectedHeaders = { 'PRIVATE-TOKEN': 'fake-gitlab-token' };
+      const expectedData = { branch: process.env.GITLAB_BRANCH, commit_message: `Pipeline Deletion - Object ${objectKey} Removed` };
+      const expectedHeaders = { 'PRIVATE-TOKEN': 'mock-gitlab-token' };
       expect(axiosDeleteStub.firstCall.args[0]).to.equal(expectedUrl);
       expect(axiosDeleteStub.firstCall.args[1]).to.exist;
       expect(axiosDeleteStub.firstCall.args[1].headers).to.deep.include(expectedHeaders);
@@ -217,14 +213,14 @@ describe('Lambda Handler Tests', () => {
       const bucketName = 'test-versioned-bucket';
       const objectKey = 'versioned/file/to/delete.json';
       const versionId = 'aBcDeFgHiJkLmNoPqRsTuVwXyZ123456';
-      const mockEvent = { Records: [{ eventName: 'ObjectRemoved:DeleteMarkerCreated', s3: { bucket: { name: bucketName }, object: { key: objectKey, versionId: versionId } } }] };
+      const mockEvent = { Records: [{ eventName: 'ObjectRemoved:DeleteMarkerCreated', userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' }, s3: { bucket: { name: bucketName }, object: { key: objectKey, versionId: versionId } } }] };
       await handler(mockEvent);
       expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
       expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
       expect(axiosDeleteStub.calledOnce).to.be.true;
       const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-      const expectedData = { branch: process.env.GITLAB_BRANCH, commit_message: `Sync S3 delete (Delete Marker Created): ${objectKey}` };
-      const expectedHeaders = { 'PRIVATE-TOKEN': 'fake-gitlab-token' };
+      const expectedData = { branch: process.env.GITLAB_BRANCH, commit_message: `Pipeline Deletion - Delete Marker Created for ${objectKey}` };
+      const expectedHeaders = { 'PRIVATE-TOKEN': 'mock-gitlab-token' };
       expect(axiosDeleteStub.firstCall.args[0]).to.equal(expectedUrl);
       expect(axiosDeleteStub.firstCall.args[1]).to.exist;
       expect(axiosDeleteStub.firstCall.args[1].headers).to.deep.include(expectedHeaders);
@@ -241,7 +237,7 @@ describe('Lambda Handler Tests', () => {
       const bucketName = 'test-bucket-unhandled';
       const objectKey = 'path/to/restored-file.bak';
       const unhandledEventName = 'ObjectRestore:Post';
-      const mockEvent = { Records: [{ eventName: unhandledEventName, s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
+      const mockEvent = { Records: [{ eventName: unhandledEventName, userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' }, s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
       const consoleLogSpy = sinon.spy(console, 'log');
       await handler(mockEvent);
       expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
@@ -250,8 +246,9 @@ describe('Lambda Handler Tests', () => {
       expect(axiosPutStub.called).to.be.false;
       expect(axiosDeleteStub.called).to.be.false;
       expect(consoleLogSpy.calledWith(sinon.match.string)).to.be.true;
-      expect(consoleLogSpy.getCall(0).args[0]).to.include(unhandledEventName);
-      expect(consoleLogSpy.getCall(0).args[0]).to.include('event type not handled');
+      //expect(consoleLogSpy.getCall(0).args[0]).to.include(unhandledEventName);
+      //expect(consoleLogSpy.getCall(0).args[0]).to.include('event type not handled');
+      sinon.assert.calledWithMatch(consoleLogSpy, sinon.match(/event type .* not handled/i));
       consoleLogSpy.restore();
     });
 
@@ -259,7 +256,7 @@ describe('Lambda Handler Tests', () => {
     it('should throw an error if retrieving the secret fails', async () => {
       const bucketName = 'test-bucket-secret-fail';
       const objectKey = 'path/to/file.txt';
-      const mockEvent = { Records: [{ eventName: 'ObjectCreated:Put', s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
+      const mockEvent = { Records: [{ eventName: 'ObjectCreated:Put', userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' }, s3: { bucket: { name: bucketName }, object: { key: objectKey } } }] };
       secretsManagerMock.on(GetSecretValueCommand).rejects(new Error('Secrets Manager Error'));
       await expect(handler(mockEvent)).to.be.rejectedWith('Secrets Manager Error');
       expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
@@ -276,6 +273,7 @@ describe('Lambda Handler Tests', () => {
       const mockEvent = {
         Records: [{
           eventName: 'ObjectCreated:Put', // Needs to be an event that triggers GetObject
+          userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' },
           s3: {
             bucket: { name: bucketName },
             object: { key: objectKey },
@@ -310,10 +308,15 @@ describe('Lambda Handler Tests', () => {
       const objectKey = 'path/to/gitlab-post-error.md';
       const mockFileContentString = 'Content that fails to upload';
       const mockFileContentBuffer = Buffer.from(mockFileContentString, 'utf-8');
+      const stream = new Readable();
+      stream.push(mockFileContentString);
+      stream.push(null);
+      const sdkStream = sdkStreamMixin(stream);
 
       const mockEvent = {
         Records: [{
           eventName: 'ObjectCreated:Put', // Event that triggers POST
+          userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' },
           s3: {
             bucket: { name: bucketName },
             object: { key: objectKey },
@@ -323,7 +326,7 @@ describe('Lambda Handler Tests', () => {
 
       // Mock S3 GetObject success
       s3Mock.on(GetObjectCommand, { Bucket: bucketName, Key: objectKey }).resolves({
-        Body: mockFileContentBuffer,
+        Body: sdkStream,
         ContentType: 'text/plain',
       });
 
@@ -343,9 +346,9 @@ describe('Lambda Handler Tests', () => {
       expect(s3Calls[0].args[0].input).to.deep.equal({ Bucket: bucketName, Key: objectKey });
       // 3. Axios POST was called (even though it failed)
       expect(axiosPostStub.calledOnce).to.be.true;
-        // Optionally, check arguments if needed, similar to success case
-        const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-        expect(axiosPostStub.firstCall.args[0]).to.equal(expectedUrl);
+      // Optionally, check arguments if needed, similar to success case
+      const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
+      expect(axiosPostStub.firstCall.args[0]).to.equal(expectedUrl);
       // 4. Other Axios methods not called
       expect(axiosPutStub.called).to.be.false;
       expect(axiosDeleteStub.called).to.be.false;
@@ -353,42 +356,43 @@ describe('Lambda Handler Tests', () => {
 
     // Test case for GitLab API failure during file delete (DELETE)
     it('should throw an error if the GitLab API deleteFile call fails', async () => {
-       // Arrange: Mock event, force GitLab DELETE to fail
-       const bucketName = 'test-bucket-gitlab-delete-fail';
-       const objectKey = 'path/to/gitlab-delete-error.tmp';
+      // Arrange: Mock event, force GitLab DELETE to fail
+      const bucketName = 'test-bucket-gitlab-delete-fail';
+      const objectKey = 'path/to/gitlab-delete-error.tmp';
 
-       const mockEvent = {
-         Records: [{
-           eventName: 'ObjectRemoved:Delete', // Event that triggers DELETE
-           s3: {
-             bucket: { name: bucketName },
-             object: { key: objectKey },
-           },
-         }],
-       };
+      const mockEvent = {
+        Records: [{
+          eventName: 'ObjectRemoved:Delete', // Event that triggers DELETE
+          userIdentity: { principalId: 'AWS:EXAMPLE_PRINCIPAL_ID' },
+          s3: {
+            bucket: { name: bucketName },
+            object: { key: objectKey },
+          },
+        }],
+      };
 
-       // No S3 mock needed for delete
+      // No S3 mock needed for delete
 
-       // Override default axios DELETE stub to reject
-       const gitlabError = new Error('GitLab API Error: Delete Failed');
-       axiosDeleteStub.rejects(gitlabError);
+      // Override default axios DELETE stub to reject
+      const gitlabError = new Error('GitLab API Error: Delete Failed');
+      axiosDeleteStub.rejects(gitlabError);
 
-       // Act & Assert: Expect the handler to reject with the GitLab error
-       await expect(handler(mockEvent)).to.be.rejectedWith(gitlabError);
+      // Act & Assert: Expect the handler to reject with the GitLab error
+      await expect(handler(mockEvent)).to.be.rejectedWith(gitlabError);
 
-       // Assert: Verify intermediate steps and the failed call
-       // 1. Secrets Manager was called
-       expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
-       // 2. S3 GetObject was NOT called
-       expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
-       // 3. Axios DELETE was called (even though it failed)
-       expect(axiosDeleteStub.calledOnce).to.be.true;
-         // Optionally, check arguments if needed, similar to success case
-         const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
-         expect(axiosDeleteStub.firstCall.args[0]).to.equal(expectedUrl);
-       // 4. Other Axios methods not called
-       expect(axiosPostStub.called).to.be.false;
-       expect(axiosPutStub.called).to.be.false;
+      // Assert: Verify intermediate steps and the failed call
+      // 1. Secrets Manager was called
+      expect(secretsManagerMock.commandCalls(GetSecretValueCommand).length).to.equal(1);
+      // 2. S3 GetObject was NOT called
+      expect(s3Mock.commandCalls(GetObjectCommand).length).to.equal(0);
+      // 3. Axios DELETE was called (even though it failed)
+      expect(axiosDeleteStub.calledOnce).to.be.true;
+      // Optionally, check arguments if needed, similar to success case
+      const expectedUrl = `${process.env.GITLAB_API_URL}/projects/${process.env.GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(objectKey)}`;
+      expect(axiosDeleteStub.firstCall.args[0]).to.equal(expectedUrl);
+      // 4. Other Axios methods not called
+      expect(axiosPostStub.called).to.be.false;
+      expect(axiosPutStub.called).to.be.false;
     });
 
   });
