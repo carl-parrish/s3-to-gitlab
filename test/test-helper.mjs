@@ -98,10 +98,11 @@ export {
   axiosPostStub,
   axiosPutStub,
   axiosDeleteStub,
-  // Add new helpers to export:
   mockSecretsManagerError,
   mockS3GetObjectError,
   mockAxiosPostError,
   mockAxiosPutError,
   mockAxiosDeleteError,
+  GetObjectCommand,
+  GetSecretValueCommand
 };
