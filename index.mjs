@@ -45,6 +45,12 @@ export const handler = async (event, context) => {
     const { eventName, userIdentity, s3 } = event.Records[0];
     const { key: objectKey, versionId } = s3.object;
     const bucketName = s3.bucket.name;
+
+    // Validate that the S3 object key exists
+    if (!objectKey) {
+      throw new Error('filePath is required');
+    }
+
     const s3UserIdentity = userIdentity.principalId;
 
     // Determine event category and handle accordingly
